@@ -134,6 +134,15 @@ RUN set -eu; \
 # (default 10.200.0.1:3128). This permits the required OpenShell L7 proxy
 # while continuing to reject arbitrary non-loopback proxy URLs.
 #
+# === Patch 2c: resolve Discord's runtime token for the gateway ===
+# The L7 proxy can rewrite REST Authorization headers that contain the
+# `openshell:resolve:env:DISCORD_BOT_TOKEN` placeholder, but Discord gateway
+# authentication happens inside the encrypted WebSocket Identify payload after
+# the CONNECT tunnel is established. The proxy cannot rewrite that payload, so
+# Discord sees the placeholder and closes the session with 4004. When running
+# inside OpenShell, replace that exact placeholder with the container-provided
+# DISCORD_BOT_TOKEN before the Discord provider constructs its clients.
+#
 # Image-level `ENV` does NOT work here: OpenShell controls the pod env at
 # runtime and image ENV vars set by Dockerfile are stripped. OPENSHELL_SANDBOX
 # is the only marker reliably present in the runtime.
@@ -146,14 +155,16 @@ RUN set -eu; \
 #   to disable the check).
 # Patch 2b: drop when OpenClaw's Discord proxy validator supports explicit
 #   trusted proxy configuration for sandboxed/proxy-only runtimes.
+# Patch 2c: drop when OpenClaw can resolve provider credential placeholders
+#   before constructing Discord gateway Identify payloads.
 #
 # SYNC WITH OPENCLAW: these patches grep for specific exports and function
 # definitions in the compiled OpenClaw dist (withStrictGuardedFetchMode,
-# assertExplicitProxyAllowed, validateDiscordProxyUrl). If OpenClaw renames,
-# removes, or restructures these symbols in a future release, the grep will
-# fail and the build will abort. When bumping OPENCLAW_VERSION, verify these
-# symbols still exist in the new dist and update the regex / sed replacement
-# accordingly.
+# assertExplicitProxyAllowed, validateDiscordProxyUrl, Discord token setup).
+# If OpenClaw renames, removes, or restructures these symbols in a future
+# release, the grep will fail and the build will abort. When bumping
+# OPENCLAW_VERSION, verify these symbols still exist in the new dist and
+# update the regex / sed replacement accordingly.
 #
 # These patches fail-close: if grep finds no targets, the build aborts so
 # the next maintainer reviewing an OPENCLAW_VERSION bump knows to revisit.
@@ -178,6 +189,12 @@ RUN set -eu; \
     test -n "$discord_proxy_file" || { echo "ERROR: Discord validateDiscordProxyUrl function not found in OpenClaw dist" >&2; exit 1; }; \
     sed -i 's#if (!isLoopbackProxyHostname(parsed.hostname)) throw new Error("Proxy URL must target a loopback host");#if (!isLoopbackProxyHostname(parsed.hostname)) { const allowedHost = normalizeLowercaseStringOrEmpty(process.env.NEMOCLAW_PROXY_HOST || "10.200.0.1"); const allowedPort = String(process.env.NEMOCLAW_PROXY_PORT || "3128"); const parsedPort = parsed.port || (parsed.protocol === "https:" ? "443" : "80"); const isOpenShellSandboxProxy = process.env.OPENSHELL_SANDBOX === "1" \&\& parsed.protocol === "http:" \&\& normalizeLowercaseStringOrEmpty(parsed.hostname) === allowedHost \&\& parsedPort === allowedPort; if (!isOpenShellSandboxProxy) throw new Error("Proxy URL must target a loopback host"); }#' "$discord_proxy_file"; \
     grep -q 'isOpenShellSandboxProxy = process.env.OPENSHELL_SANDBOX === "1"' "$discord_proxy_file" || { echo "ERROR: Patch 2b (Discord proxy validator) not applied" >&2; exit 1; }; \
+    # --- Patch 2c: resolve Discord placeholder token before gateway Identify --- \
+    discord_provider_file="$(grep -RIlE --include='*.js' 'const token = normalizeDiscordToken\(opts\.token \?\? void 0, "channels\.discord\.token"\) \?\? account\.token;' "$OC_DIST" | head -n 1)"; \
+    test -n "$discord_provider_file" || { echo "ERROR: Discord provider token setup not found in OpenClaw dist" >&2; exit 1; }; \
+    sed -i 's#const token = normalizeDiscordToken(opts.token ?? void 0, "channels.discord.token") ?? account.token;#let token = normalizeDiscordToken(opts.token ?? void 0, "channels.discord.token") ?? account.token;#' "$discord_provider_file"; \
+    sed -i 's#const rawDiscordCfg = account.config;#if (process.env.OPENSHELL_SANDBOX === "1" \&\& token === "openshell:resolve:env:DISCORD_BOT_TOKEN") { const envDiscordToken = normalizeDiscordToken(process.env.DISCORD_BOT_TOKEN ?? void 0, "DISCORD_BOT_TOKEN"); if (envDiscordToken \&\& !envDiscordToken.startsWith("openshell:resolve:")) { token = envDiscordToken; runtime.log?.("[nemoclaw] resolved Discord token from runtime env for provider startup"); } } const rawDiscordCfg = account.config;#' "$discord_provider_file"; \
+    grep -q 'resolved Discord token from runtime env for provider startup' "$discord_provider_file" || { echo "ERROR: Patch 2c (Discord runtime token) not applied" >&2; exit 1; }; \
     # --- Patch 3: follow symlinks in plugin-install path checks (#2203) --- \
     # OpenClaw's install-safe-path and install-package-dir reject symlinked \
     # directories via lstat.  NemoClaw symlinks ~/.openclaw/extensions → \

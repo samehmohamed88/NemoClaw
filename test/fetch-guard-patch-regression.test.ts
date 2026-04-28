@@ -43,4 +43,12 @@ describe("fetch-guard patch regression guard", () => {
     expect(dockerfileSrc).toContain('parsed.protocol === "http:"');
     expect(dockerfileSrc).toContain("Patch 2b (Discord proxy validator) not applied");
   });
+
+  it("Patch 2c resolves the Discord placeholder before gateway startup", () => {
+    expect(dockerfileSrc).toContain("Discord provider token setup");
+    expect(dockerfileSrc).toContain('token === "openshell:resolve:env:DISCORD_BOT_TOKEN"');
+    expect(dockerfileSrc).toContain("envDiscordToken");
+    expect(dockerfileSrc).toContain("resolved Discord token from runtime env for provider startup");
+    expect(dockerfileSrc).toContain("Patch 2c (Discord runtime token) not applied");
+  });
 });

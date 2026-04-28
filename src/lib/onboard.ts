@@ -3803,10 +3803,12 @@ async function createSandbox(
       envArgs.push(formatEnvAssignment(webSearch.BRAVE_API_KEY_ENV, braveKey));
     }
   }
-  // Slack Socket Mode requires both tokens in the container env so the baked
-  // openshell:resolve:env: placeholders in openclaw.json are substituted.
-  // The provider registration above handles L7 proxy auth header rewriting;
-  // the --env args here ensure the container env vars hold the real values.
+  // Some provider startup paths need a real token in process. The L7 proxy can
+  // rewrite REST Authorization headers, but it cannot rewrite Slack Socket Mode
+  // handshakes or Discord gateway Identify payloads after TLS CONNECT.
+  if (tokensByEnvKey["DISCORD_BOT_TOKEN"]) {
+    envArgs.push(formatEnvAssignment("DISCORD_BOT_TOKEN", tokensByEnvKey["DISCORD_BOT_TOKEN"]));
+  }
   if (tokensByEnvKey["SLACK_BOT_TOKEN"]) {
     envArgs.push(formatEnvAssignment("SLACK_BOT_TOKEN", tokensByEnvKey["SLACK_BOT_TOKEN"]));
     if (tokensByEnvKey["SLACK_APP_TOKEN"]) {
