@@ -119,6 +119,12 @@ describe("generate-openclaw-config.py: config generation", () => {
     expect(config.channels.telegram).toBeDefined();
   });
 
+  it("writes the configured proxy into Discord account config", () => {
+    const channels = Buffer.from(JSON.stringify(["discord"])).toString("base64");
+    const config = runConfigScript({ NEMOCLAW_MESSAGING_CHANNELS_B64: channels });
+    expect(config.channels.discord.accounts.default.proxy).toBe("http://10.200.0.1:3128");
+  });
+
   it("enables web search when env is '1'", () => {
     const config = runConfigScript({ NEMOCLAW_WEB_SEARCH_ENABLED: "1" });
     expect(config.tools?.web?.search?.enabled).toBe(true);
