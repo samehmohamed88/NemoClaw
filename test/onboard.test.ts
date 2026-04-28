@@ -3791,21 +3791,21 @@ const { createSandbox } = require(${onboardPath});
       assert.match(createCommand.policyContent || "", /slack:/);
       assert.match(createCommand.policyContent || "", /wss-primary\.slack\.com/);
 
-      // Discord and Telegram tokens must NOT appear in the sandbox create command
-      // (they flow exclusively through the openshell provider credential system).
-      assert.doesNotMatch(createCommand.command, /test-discord-token-value/);
+      // Telegram tokens stay provider-only. Discord and Slack startup paths
+      // need real tokens in-process because they cannot be fully rewritten by
+      // the L7 proxy once a gateway/socket handshake is underway.
       assert.doesNotMatch(createCommand.command, /123456:ABC-test-telegram-token/);
-      // Slack tokens ARE injected as --env args so the baked openclaw.json
-      // openshell:resolve:env: placeholders resolve inside the container.
+      assert.match(createCommand.command, /DISCORD_BOT_TOKEN=test-discord-token-value/);
       assert.match(createCommand.command, /SLACK_BOT_TOKEN=xoxb-test-slack-token-value/);
       assert.match(createCommand.command, /SLACK_APP_TOKEN=xapp-test-slack-app-token-value/);
 
-      // Verify blocked credentials are NOT in the sandbox spawn environment
+      // Verify blocked credentials are NOT in the parent process spawn
+      // environment; provider token handoff is done through explicit --env args.
       assert.ok(createCommand.env, "expected env to be captured from spawn call");
       assert.equal(
         createCommand.env.DISCORD_BOT_TOKEN,
         undefined,
-        "DISCORD_BOT_TOKEN must not be in sandbox env",
+        "DISCORD_BOT_TOKEN must not be in spawn env",
       );
       assert.equal(
         createCommand.env.SLACK_BOT_TOKEN,
