@@ -129,6 +129,22 @@ RUN set -eu; \
 # proxy itself enforces per-endpoint network policy inside the sandbox,
 # so the trust boundary for SSRF protection is unchanged.
 #
+# === Patch 2b: allow the configured OpenShell proxy for Discord REST ===
+# OpenClaw's Discord extension validates `accounts.*.proxy` with
+# validateDiscordProxyUrl(), and upstream currently only accepts loopback
+# proxies. NemoClaw has to bake the OpenShell L7 proxy into Discord account
+# config because the Discord extension's gateway path does not honor
+# HTTP_PROXY/HTTPS_PROXY env vars (see NemoClaw#1738 below). The same account
+# proxy is also reused for Discord REST, including the startup
+# /oauth2/applications/@me lookup. Without this narrow exception, OpenClaw
+# logs "invalid rest proxy", drops back to direct egress, then fails DNS inside
+# the sandbox and exits with "Failed to resolve Discord application id".
+#
+# Keep the upstream loopback-only rule everywhere except OpenShell sandbox
+# runtimes where the proxy host/port exactly matches NEMOCLAW_PROXY_HOST/PORT
+# (default 10.200.0.1:3128). This permits the required OpenShell L7 proxy
+# while continuing to reject arbitrary non-loopback proxy URLs.
+#
 # Image-level `ENV` does NOT work here: OpenShell controls the pod env at
 # runtime and image ENV vars set by Dockerfile are stripped. OPENSHELL_SANDBOX
 # is the only marker reliably present in the runtime.
@@ -139,15 +155,18 @@ RUN set -eu; \
 # Patch 2: drop when OpenClaw fixes assertExplicitProxyAllowed to skip the
 #   target hostname allowlist for the proxy hostname check (or exposes config
 #   to disable the check).
+# Patch 2b: drop when OpenClaw's Discord proxy validator supports explicit
+#   trusted proxy configuration for sandboxed/proxy-only runtimes.
 #
 # SYNC WITH OPENCLAW: these patches grep for specific exports and function
 # definitions in the compiled OpenClaw dist (withStrictGuardedFetchMode,
-# assertExplicitProxyAllowed). If OpenClaw renames, removes, or restructures
-# either symbol in a future release, the grep will fail and the build will
-# abort. When bumping OPENCLAW_VERSION, verify both symbols still exist in
-# the new dist and update the regex / sed replacement accordingly.
+# assertExplicitProxyAllowed, validateDiscordProxyUrl). If OpenClaw renames,
+# removes, or restructures these symbols in a future release, the grep will
+# fail and the build will abort. When bumping OPENCLAW_VERSION, verify these
+# symbols still exist in the new dist and update the regex / sed replacement
+# accordingly.
 #
-# Both patches fail-close: if grep finds no targets, the build aborts so
+# These patches fail-close: if grep finds no targets, the build aborts so
 # the next maintainer reviewing an OPENCLAW_VERSION bump knows to revisit.
 COPY scripts/rcf_patch.py /usr/local/lib/nemoclaw/rcf_patch.py
 # hadolint ignore=SC2016,DL3059,DL4006
@@ -166,6 +185,11 @@ RUN set -eu; \
     test -n "$fg_assert"; \
     printf '%s\n' "$fg_assert" | xargs sed -i -E 's|(async function assertExplicitProxyAllowed\([^)]*\) \{)|\1 if (process.env.OPENSHELL_SANDBOX === "1") return; /* nemoclaw: env-gated bypass, see Dockerfile */ |'; \
     grep -REq --include='*.js' 'assertExplicitProxyAllowed\([^)]*\) \{ if \(process\.env\.OPENSHELL_SANDBOX === "1"\) return; /\* nemoclaw' "$OC_DIST"; \
+    # --- Patch 2b: allow configured OpenShell proxy for Discord REST --- \
+    discord_proxy_file="$(grep -RIlE --include='*.js' 'function validateDiscordProxyUrl\(proxyUrl\)' "$OC_DIST" | head -n 1)"; \
+    test -n "$discord_proxy_file" || { echo "ERROR: Discord validateDiscordProxyUrl function not found in OpenClaw dist" >&2; exit 1; }; \
+    sed -i 's#if (!isLoopbackProxyHostname(parsed.hostname)) throw new Error("Proxy URL must target a loopback host");#if (!isLoopbackProxyHostname(parsed.hostname)) { const allowedHost = normalizeLowercaseStringOrEmpty(process.env.NEMOCLAW_PROXY_HOST || "10.200.0.1"); const allowedPort = String(process.env.NEMOCLAW_PROXY_PORT || "3128"); const parsedPort = parsed.port || (parsed.protocol === "https:" ? "443" : "80"); const isOpenShellSandboxProxy = process.env.OPENSHELL_SANDBOX === "1" \&\& parsed.protocol === "http:" \&\& normalizeLowercaseStringOrEmpty(parsed.hostname) === allowedHost \&\& parsedPort === allowedPort; if (!isOpenShellSandboxProxy) throw new Error("Proxy URL must target a loopback host"); }#' "$discord_proxy_file"; \
+    grep -q 'isOpenShellSandboxProxy = process.env.OPENSHELL_SANDBOX === "1"' "$discord_proxy_file" || { echo "ERROR: Patch 2b (Discord proxy validator) not applied" >&2; exit 1; }; \
     # --- Patch 3: follow symlinks in plugin-install path checks (#2203) --- \
     # OpenClaw's install-safe-path and install-package-dir reject symlinked \
     # directories via lstat. Changing lstat → stat in these two modules lets \

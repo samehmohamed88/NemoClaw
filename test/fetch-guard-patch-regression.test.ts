@@ -141,4 +141,13 @@ if (globalThis.proxyChecks.length !== 0) throw new Error('sandbox proxy validati
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
+
+  it("Patch 2b permits only the configured OpenShell proxy for Discord REST", () => {
+    expect(dockerfileSrc).toContain("validateDiscordProxyUrl");
+    expect(dockerfileSrc).toContain("isOpenShellSandboxProxy");
+    expect(dockerfileSrc).toContain("NEMOCLAW_PROXY_HOST");
+    expect(dockerfileSrc).toContain("NEMOCLAW_PROXY_PORT");
+    expect(dockerfileSrc).toContain('parsed.protocol === "http:"');
+    expect(dockerfileSrc).toContain("Patch 2b (Discord proxy validator) not applied");
+  });
 });
